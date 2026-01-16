@@ -30,7 +30,7 @@ if "api_calls" not in st.session_state:
 
 def check_api_limit(calls=1):
     if st.session_state.api_calls + calls > MAX_CALLS:
-        st.error(f"⚠ API利用上限に達します（上限 {MAX_CALLS} 回）")
+        st.error(f"⚠ API利用上限に達しました（上限 {MAX_CALLS} 回）")
         st.stop()
 
 # ======================================================
@@ -52,13 +52,6 @@ ITEM_NAMES = {
     "13": "将来志向・イノベーション性",
     "14": "政策横断性・全体視点",
     "15": "議員としての成長・継続性"
-}
-
-AXIS_LABELS = {
-    "A": "核心適合・本質性",
-    "B": "明確性・具体性",
-    "C": "根拠・裏付け",
-    "D": "議会・行政適合性"
 }
 
 # ======================================================
@@ -102,7 +95,11 @@ def show_radar_chart(item_totals):
 def build_prompt(text: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
-**必ずJSONのみ**を出力してください。
+
+【厳守事項】
+・JSON以外の文字を一切出力しない
+・説明文、コメント、改行を追加しない
+・数値はすべて整数（0〜5）
 
 【評価対象】
 {text}
@@ -142,25 +139,23 @@ if st.button("AIで採点"):
 
     with st.spinner("採点中…"):
         response = client.responses.create(
-            model="gpt-4o",
-            input=[
-                {
-                    "role": "system",
-                    "content": "You are a strict JSON-only evaluator."
-                },
-                {
-                    "role": "user",
-                    "content": build_prompt(question_text)
-                }
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": "You are a strict JSON-only evaluator."},
+                {"role": "user", "content": build_prompt(question_text)}
             ]
         )
         st.session_state.api_calls += 1
 
+    # ==================================================
+    # JSON解析（最安定）
+    # ==================================================
+    raw = response.output_text.strip()
+
     try:
-        raw = response.output_text
         data = json.loads(raw)
     except Exception:
-        st.error("JSON解析に失敗しました。")
+        st.error("JSON解析に失敗しました。AIの出力を表示します。")
         st.code(raw)
         st.stop()
 
