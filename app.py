@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # ======================================================
-# OpenAI API Key（Secrets固定）
+# OpenAI API Key
 # ======================================================
 if "OPENAI_API_KEY" not in st.secrets:
     st.error("OpenAI API Key が設定されていません（Secrets）")
@@ -28,13 +28,13 @@ client = OpenAI(api_key=API_KEY)
 if "api_calls" not in st.session_state:
     st.session_state.api_calls = 0
 
-def check_api_limit():
-    if st.session_state.api_calls >= MAX_CALLS:
-        st.error(f"⚠ API利用上限に達しました（{MAX_CALLS}回）")
+def check_api_limit(calls=1):
+    if st.session_state.api_calls + calls > MAX_CALLS:
+        st.error(f"⚠ API利用上限に達します（上限 {MAX_CALLS} 回）")
         st.stop()
 
 # ======================================================
-# 評価項目（15項目）
+# 評価項目
 # ======================================================
 ITEM_NAMES = {
     "1": "テーマ設定の妥当性",
@@ -71,7 +71,7 @@ SCORE_EXPLANATION = {
 }
 
 # ======================================================
-# ランク判定（210点＝合格）
+# 判定
 # ======================================================
 def judge_rank(total: int) -> str:
     if total >= 270:
@@ -81,10 +81,8 @@ def judge_rank(total: int) -> str:
     if total >= 210:
         return "B（合格：実務水準）"
     if total >= 180:
-        return "C（未達）"
-    if total >= 150:
-        return "D（要再設計）"
-    return "E（不十分）"
+        return "C（ボーダー）"
+    return "D（不十分）"
 
 # ======================================================
 # レーダーチャート
@@ -97,8 +95,7 @@ def show_radar_chart(item_totals):
     fig.add_trace(go.Scatterpolar(
         r=values + [values[0]],
         theta=labels + [labels[0]],
-        fill="toself",
-        line=dict(width=3)
+        fill="toself"
     ))
 
     fig.update_layout(
@@ -112,24 +109,21 @@ def show_radar_chart(item_totals):
 # ======================================================
 # AI採点プロンプト
 # ======================================================
-def build_prompt(text: str) -> str:
+def build_prompt(text: str, council: str, member: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
+JSON以外は絶対に出力しないでください。
 
-【採点方式】
-・15項目
-・各項目 A〜D の4観点
-・各観点 0〜5点
-・1項目20点、合計300点
-・3点は最低限
-・5点は例外的
-・迷ったら必ず低く
-・評価不能は0点
+【議会名】
+{council}
 
-【評価対象】
+【議員名】
+{member}
+
+【一般質問原稿】
 {text}
 
-【出力形式（JSONのみ）】
+出力形式：
 {{
  "scores": {{
    "1": {{"A":0,"B":0,"C":0,"D":0}},
@@ -157,134 +151,114 @@ def build_prompt(text: str) -> str:
 st.title("📘 一般質問 採点AIシステム（300点モデル）")
 st.caption(f"API利用状況：{st.session_state.api_calls} / {MAX_CALLS}")
 
+# ------------------------------------------------------
+# 議会名・議員名入力
+# ------------------------------------------------------
+c1, c2 = st.columns(2)
+
+with c1:
+    council_name = st.text_input(
+        "🏛 議会名（例：〇〇市議会）",
+        placeholder="〇〇市議会"
+    )
+
+with c2:
+    member_name = st.text_input(
+        "🧑‍💼 議員名（例：山田 太郎）",
+        placeholder="山田 太郎"
+    )
+
+# ------------------------------------------------------
+# 原稿入力
+# ------------------------------------------------------
 question_text = st.text_area(
     "▼ 一般質問の原稿を貼り付けてください",
     height=280
 )
 
+# ======================================================
+# 採点実行
+# ======================================================
 if st.button("🚀 AIで自動採点する"):
-    check_api_limit()
+    check_api_limit(calls=3)
+
+    if not council_name.strip() or not member_name.strip():
+        st.error("議会名と議員名を入力してください。")
+        st.stop()
 
     if not question_text.strip():
-        st.error("文章が入力されていません。")
-    else:
-        with st.spinner("AIが採点中…"):
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": build_prompt(question_text)}]
-            )
-            st.session_state.api_calls += 1
+        st.error("一般質問原稿が入力されていません。")
+        st.stop()
 
-            raw = response.choices[0].message.content
-            data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
-            scores = data["scores"]
-
-            total = 0
-            item_totals = {}
-            for i in range(1, 16):
-                s = scores[str(i)]
-                subtotal = s["A"] + s["B"] + s["C"] + s["D"]
-                item_totals[str(i)] = subtotal
-                total += subtotal
-
-        st.success("採点完了")
-
-        # ==================================================
-        # 評価軸の凡例（1回だけ）
-        # ==================================================
-        st.info(
-            "【評価軸の凡例】\n\n"
-            "■ 核心適合・本質性\n"
-            "なぜこの課題が重要なのか、地域課題の核心を突いているか\n\n"
-            "■ 明確性・具体性\n"
-            "誰が・いつ・何をするのかが具体的に示されているか\n\n"
-            "■ 根拠・裏付け\n"
-            "統計・計画・制度・会議録など客観的根拠が示されているか\n\n"
-            "■ 議会・行政適合性\n"
-            "議会質問として適切で、行政が答弁可能な設計か"
+    # -----------------------------
+    # 採点
+    # -----------------------------
+    with st.spinner("AIが採点中…"):
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": build_prompt(
+                    question_text,
+                    council_name,
+                    member_name
+                )
+            }]
         )
+        st.session_state.api_calls += 1
 
-        for i in range(1, 16):
-            with st.expander(f"{i}. {ITEM_NAMES[str(i)]}（{item_totals[str(i)]} / 20点）"):
-                for k in ["A", "B", "C", "D"]:
-                    p = scores[str(i)][k]
-                    st.markdown(f"**{AXIS_LABELS[k]}：{p}点**｜{SCORE_EXPLANATION[p]}")
+    try:
+        raw = response.choices[0].message.content
+        data = json.loads(raw)
+    except Exception:
+        st.error("AIの出力が不正な形式でした。")
+        st.code(raw)
+        st.stop()
 
-        st.subheader(f"🔢 合計点：**{total} / 300 点**")
-        st.subheader(f"🏆 ランク：**{judge_rank(total)}**")
+    scores = data["scores"]
 
-        # ==================================================
-        # 合格／不合格 色分け
-        # ==================================================
-        if total >= 210:
-            st.success("🟢 判定：合格（実務水準）")
-        else:
-            st.error("🔴 判定：不合格（要改善）")
+    total = 0
+    item_totals = {}
+    for i in range(1, 16):
+        s = scores[str(i)]
+        subtotal = s["A"] + s["B"] + s["C"] + s["D"]
+        item_totals[str(i)] = subtotal
+        total += subtotal
 
-        # ==================================================
-        # 合格に足りない項目 TOP3（不合格時）
-        # ==================================================
-        if total < 210:
-            st.subheader("📉 合格に足りない項目 TOP3")
-            shortage_list = []
-            for i in range(1, 16):
-                current = item_totals[str(i)]
-                shortage_list.append({
-                    "item": ITEM_NAMES[str(i)],
-                    "current": current,
-                    "shortage": 20 - current
-                })
+    # ==================================================
+    # 評価対象表示
+    # ==================================================
+    st.markdown(
+        f"""
+### 🏛 評価対象
+- **議会名**：{council_name}
+- **議員名**：{member_name}
+"""
+    )
 
-            top3 = sorted(shortage_list, key=lambda x: x["shortage"], reverse=True)[:3]
-            for idx, t in enumerate(top3, start=1):
+    # ==================================================
+    # 判定表示
+    # ==================================================
+    if total >= 210:
+        st.success(f"🟢 合格：{total} / 300 点（{judge_rank(total)}）")
+    elif total >= 180:
+        st.warning(f"🟡 ボーダー：{total} / 300 点（{judge_rank(total)}）")
+    else:
+        st.error(f"🔴 不合格：{total} / 300 点（{judge_rank(total)}）")
+
+    # ==================================================
+    # 項目別詳細
+    # ==================================================
+    for i in range(1, 16):
+        with st.expander(f"{i}. {ITEM_NAMES[str(i)]}（{item_totals[str(i)]} / 20点）"):
+            for k in ["A", "B", "C", "D"]:
+                p = scores[str(i)][k]
                 st.markdown(
-                    f"**{idx}. {t['item']}**  \n"
-                    f"現在：{t['current']} / 20 点 ｜ 不足：**{t['shortage']} 点**"
+                    f"**{AXIS_LABELS[k]}：{p}点**｜{SCORE_EXPLANATION[p]}"
                 )
 
-        st.subheader("📈 レーダーチャート")
-        show_radar_chart(item_totals)
-
-        # ==================================================
-        # 総合講評
-        # ==================================================
-        summary_prompt = f"""
-あなたは地方議会一般質問の評価者です。
-合格基準は210点以上です。
-以下の採点結果を踏まえて、200〜300字で総合講評を書いてください。
-
-【原稿】
-{question_text}
-
-【結果】
-合計点：{total} / 300
-ランク：{judge_rank(total)}
-項目別得点：
-{json.dumps(item_totals, ensure_ascii=False)}
-"""
-        with st.spinner("総合講評を作成中…"):
-            summary_response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": summary_prompt}]
-            )
-        st.subheader("📝 総合講評")
-        st.write(summary_response.choices[0].message.content)
-
-        # ==================================================
-        # 改善提案
-        # ==================================================
-        improve_prompt = f"""
-あなたは地方議会一般質問の専門添削者です。
-Sランク（270点以上）を目指すための改善点を5つ挙げてください。
-制度名・数値・期限・修正例を必ず含めてください。
-
-【原稿】
-{question_text}
-"""
-        with st.spinner("改善提案を作成中…"):
-            improve_response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": improve_prompt}]
-            )
-        st.subheader("🛠 改善提案")
-        st.write(improve_response.choices[0].message.content)
+    # ==================================================
+    # レーダーチャート
+    # ==================================================
+    st.subheader("📈 レーダーチャート")
+    show_radar_chart(item_totals)
