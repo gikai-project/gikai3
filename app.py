@@ -7,34 +7,25 @@ import plotly.graph_objects as go
 # Streamlit 基本設定
 # ======================================================
 st.set_page_config(
-    page_title="一般質問 採点AIシステム（300点モデル）",
+    page_title="一般質問 採点AIシステム（75点モデル）",
     layout="wide"
 )
 
 # ======================================================
-# OpenAI API Key
+# API キー入力（サイドバー）
 # ======================================================
-if "OPENAI_API_KEY" not in st.secrets:
-    st.error("OpenAI API Key が設定されていません（Secrets）")
-    st.stop()
+st.sidebar.header("🔑 OpenAI API Key")
+api_key = st.sidebar.text_input(
+    "APIキーを入力してください（sk- で始まるキー）",
+    type="password"
+)
 
-API_KEY = st.secrets["OPENAI_API_KEY"]
-MAX_CALLS = int(st.secrets.get("MAX_CALLS", 100))
-client = OpenAI(api_key=API_KEY)
-
-# ======================================================
-# API使用回数管理
-# ======================================================
-if "api_calls" not in st.session_state:
-    st.session_state.api_calls = 0
-
-def check_api_limit(calls=1):
-    if st.session_state.api_calls + calls > MAX_CALLS:
-        st.error(f"⚠ API利用上限に達しました（上限 {MAX_CALLS} 回）")
-        st.stop()
+client = None
+if api_key:
+    client = OpenAI(api_key=api_key)
 
 # ======================================================
-# 評価項目
+# 評価項目名（15項目）
 # ======================================================
 ITEM_NAMES = {
     "1": "テーマ設定の妥当性",
@@ -55,25 +46,27 @@ ITEM_NAMES = {
 }
 
 # ======================================================
-# 判定
+# ランク判定（75点）
 # ======================================================
 def judge_rank(total: int) -> str:
-    if total >= 270:
-        return "S（模範水準）"
-    if total >= 240:
-        return "A（非常に優秀）"
-    if total >= 210:
-        return "B（合格：実務水準）"
-    if total >= 180:
-        return "C（ボーダー）"
-    return "D（不十分）"
+    if total >= 65:
+        return "S（模範的）"
+    if total >= 55:
+        return "A（非常に良い）"
+    if total >= 45:
+        return "B（水準以上）"
+    if total >= 35:
+        return "C（最低限成立）"
+    if total >= 25:
+        return "D（弱い）"
+    return "E（不十分）"
 
 # ======================================================
-# レーダーチャート
+# レーダーチャート（15項目×0〜5）
 # ======================================================
-def show_radar_chart(item_totals):
+def show_radar(scores):
     labels = [ITEM_NAMES[str(i)] for i in range(1, 16)]
-    values = [item_totals[str(i)] for i in range(1, 16)]
+    values = [scores[str(i)] for i in range(1, 16)]
 
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
@@ -81,105 +74,112 @@ def show_radar_chart(item_totals):
         theta=labels + [labels[0]],
         fill="toself"
     ))
-
     fig.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 20])),
-        showlegend=False
+        polar=dict(radialaxis=dict(range=[0, 5])),
+        showlegend=False,
+        title="評価分布（15項目）"
     )
-
     st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
-# プロンプト
+# AI 採点プロンプト（15項目×0〜5）
 # ======================================================
 def build_prompt(text: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
 
-【厳守事項】
-・JSON以外の文字を一切出力しない
-・説明文、コメント、改行を追加しない
-・数値はすべて整数（0〜5）
+【採点方式】
+・15項目
+・各項目 0〜5点
+・3点＝最低限
+・5点＝例外的水準
+・迷った場合は必ず低い点を付ける
+・評価不能な場合は0点
 
-【評価対象】
+【評価観点（理由説明用）】
+A：核心適合・本質性
+B：明確性・具体性
+C：根拠・裏付け
+D：議会・行政適合性
+
+【評価対象文章】
 {text}
 
-【出力形式】
+【出力形式（JSONのみ）】
 {{
  "scores": {{
-   "1": {{"A":0,"B":0,"C":0,"D":0}},
-   "2": {{"A":0,"B":0,"C":0,"D":0}},
-   "3": {{"A":0,"B":0,"C":0,"D":0}},
-   "4": {{"A":0,"B":0,"C":0,"D":0}},
-   "5": {{"A":0,"B":0,"C":0,"D":0}},
-   "6": {{"A":0,"B":0,"C":0,"D":0}},
-   "7": {{"A":0,"B":0,"C":0,"D":0}},
-   "8": {{"A":0,"B":0,"C":0,"D":0}},
-   "9": {{"A":0,"B":0,"C":0,"D":0}},
-   "10": {{"A":0,"B":0,"C":0,"D":0}},
-   "11": {{"A":0,"B":0,"C":0,"D":0}},
-   "12": {{"A":0,"B":0,"C":0,"D":0}},
-   "13": {{"A":0,"B":0,"C":0,"D":0}},
-   "14": {{"A":0,"B":0,"C":0,"D":0}},
-   "15": {{"A":0,"B":0,"C":0,"D":0}}
+   "1": 0,
+   "2": 0,
+   "3": 0,
+   "4": 0,
+   "5": 0,
+   "6": 0,
+   "7": 0,
+   "8": 0,
+   "9": 0,
+   "10": 0,
+   "11": 0,
+   "12": 0,
+   "13": 0,
+   "14": 0,
+   "15": 0
+ }},
+ "reasons": {{
+   "1": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "2": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "3": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "4": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "5": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "6": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "7": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "8": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "9": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "10": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "11": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "12": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "13": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "14": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
+   "15": {{"A":"理由","B":"理由","C":"理由","D":"理由"}}
  }}
 }}
-"""
+""".strip()
 
 # ======================================================
 # UI
 # ======================================================
-st.title("📘 一般質問 採点AIシステム（300点モデル）")
-st.caption(f"API利用状況：{st.session_state.api_calls} / {MAX_CALLS}")
+st.title("📘 一般質問 採点AIシステム（15項目×0〜5点）")
+st.markdown("各項目0〜5点、合計 **75点満点** の厳格評価です。")
 
-question_text = st.text_area("一般質問原稿", height=280)
+text = st.text_area("▼ 一般質問原稿", height=280)
 
-if st.button("AIで採点"):
-    check_api_limit()
-
-    with st.spinner("採点中…"):
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {
-                    "role": "system",
-                    "content": "You are a strict JSON-only evaluator."
-                },
-                {
-                    "role": "user",
-                    "content": build_prompt(question_text)
-                }
-            ]
-        )
-        st.session_state.api_calls += 1
-
-    # ==================================================
-    # JSON解析（最安定）
-    # ==================================================
-    raw = response.output_text.strip()
-
-    try:
-        data = json.loads(raw)
-    except Exception:
-        st.error("JSON解析に失敗しました。AIの出力を表示します。")
-        st.code(raw)
-        st.stop()
-
-    scores = data["scores"]
-    total = 0
-    item_totals = {}
-
-    for i in range(1, 16):
-        subtotal = sum(scores[str(i)].values())
-        item_totals[str(i)] = subtotal
-        total += subtotal
-
-    # 判定表示
-    if total >= 210:
-        st.success(f"🟢 合格：{total} / 300（{judge_rank(total)}）")
-    elif total >= 180:
-        st.warning(f"🟡 ボーダー：{total} / 300（{judge_rank(total)}）")
+if st.button("🚀 AIで自動採点"):
+    if not api_key:
+        st.error("APIキーが未入力です。")
+    elif not text.strip():
+        st.error("文章が入力されていません。")
     else:
-        st.error(f"🔴 不合格：{total} / 300（{judge_rank(total)}）")
+        with st.spinner("AIが採点中…"):
+            response = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": build_prompt(text)}]
+            )
 
-    show_radar_chart(item_totals)
+            raw = response.choices[0].message.content
+            data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+
+            scores = {k: int(v) for k, v in data["scores"].items()}
+            reasons = data["reasons"]
+
+            total = sum(scores.values())
+
+        st.success("採点完了")
+
+        for i in range(1, 16):
+            with st.expander(f"{i}. {ITEM_NAMES[str(i)]}（{scores[str(i)]}点）"):
+                for k in ["A", "B", "C", "D"]:
+                    st.markdown(f"**{k}**：{reasons[str(i)][k]}")
+
+        st.subheader(f"🔢 合計点：{total} / 75")
+        st.subheader(f"🏆 ランク：{judge_rank(total)}")
+
+        show_radar(scores)
