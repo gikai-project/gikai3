@@ -12,17 +12,30 @@ st.set_page_config(
 )
 
 # ======================================================
-# API キー入力（サイドバー）
+# OpenAI API Key（Secrets 固定）
 # ======================================================
-st.sidebar.header("🔑 OpenAI API Key")
-api_key = st.sidebar.text_input(
-    "APIキーを入力してください（sk- で始まるキー）",
-    type="password"
-)
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("OpenAI API Key が設定されていません（Secrets）")
+    st.stop()
 
-client = None
-if api_key:
-    client = OpenAI(api_key=api_key)
+API_KEY = st.secrets["OPENAI_API_KEY"]
+MAX_CALLS = int(st.secrets.get("MAX_CALLS", 100))
+
+client = OpenAI(api_key=API_KEY)
+
+# ======================================================
+# API使用回数カウンタ
+# ======================================================
+if "api_calls" not in st.session_state:
+    st.session_state.api_calls = 0
+
+def check_api_limit():
+    if st.session_state.api_calls >= MAX_CALLS:
+        st.error(
+            f"⚠ API利用上限に達しました（{MAX_CALLS}回）。"
+            " 管理者に連絡してください。"
+        )
+        st.stop()
 
 # ======================================================
 # 評価項目名（15項目）
@@ -62,7 +75,7 @@ def judge_rank(total: int) -> str:
     return "E（不十分）"
 
 # ======================================================
-# A〜D別レーダーチャート
+# レーダーチャート
 # ======================================================
 def show_axis_radar(scores, axis):
     labels = [ITEM_NAMES[str(i)] for i in range(1, 16)]
@@ -82,26 +95,19 @@ def show_axis_radar(scores, axis):
     st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
-# AI 採点プロンプト（15項目×20点）
+# AI 採点プロンプト
 # ======================================================
 def build_prompt(text: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
 
 【採点方式】
-・評価項目：15
-・各項目は A〜D の4観点
-・各観点 0〜5点（整数）
-・1項目あたり最大20点
-・3点は最低限、5点は例外的水準
+・15項目
+・各項目 A〜D（各0〜5点）
+・1項目20点、合計300点
+・3点＝最低限、5点＝例外的
 ・迷った場合は必ず低い点を付ける
-・評価不能な場合は0点
-
-【評価観点】
-A：核心適合・本質性
-B：明確性・具体性
-C：根拠・裏付け
-D：議会・行政適合性
+・評価不能は0点
 
 【評価対象文章】
 {text}
@@ -124,87 +130,59 @@ D：議会・行政適合性
    "13": {{"A":0,"B":0,"C":0,"D":0}},
    "14": {{"A":0,"B":0,"C":0,"D":0}},
    "15": {{"A":0,"B":0,"C":0,"D":0}}
- }},
- "comments": {{
-   "1": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "2": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "3": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "4": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "5": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "6": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "7": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "8": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "9": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "10": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "11": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "12": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "13": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "14": {{"A":"理由","B":"理由","C":"理由","D":"理由"}},
-   "15": {{"A":"理由","B":"理由","C":"理由","D":"理由"}}
  }}
 }}
 """.strip()
 
 # ======================================================
-# メインUI
+# UI
 # ======================================================
-st.title("📘 一般質問 採点AIシステム（15項目×20点＝300点）")
-st.markdown("各項目 A〜D（各0〜5点）で **300点満点** の厳格評価を行います。")
+st.title("📘 一般質問 採点AIシステム（300点モデル）")
+st.caption(f"API利用状況：{st.session_state.api_calls} / {MAX_CALLS} 回")
 
-question_text = st.text_area(
-    "▼ 一般質問の原稿を貼り付けてください",
-    height=280
-)
+question_text = st.text_area("▼ 一般質問の原稿", height=280)
 
-if st.button("🚀 AIで自動採点する"):
-    if not api_key:
-        st.error("APIキーが入力されていません。")
-    elif not question_text.strip():
+if st.button("🚀 AIで自動採点"):
+    check_api_limit()
+
+    if not question_text.strip():
         st.error("文章が入力されていません。")
     else:
         with st.spinner("AIが採点中…"):
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4.1",
-                    messages=[{"role": "user", "content": build_prompt(question_text)}]
-                )
+            response = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": build_prompt(question_text)}]
+            )
 
-                raw = response.choices[0].message.content
-                data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+            st.session_state.api_calls += 1
 
-                scores = data["scores"]
-                comments = data["comments"]
+            raw = response.choices[0].message.content
+            data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
 
-                total = 0
-                item_totals = {}
+            scores = data["scores"]
 
-                for i in range(1, 16):
-                    s = scores[str(i)]
-                    subtotal = s["A"] + s["B"] + s["C"] + s["D"]
-                    item_totals[str(i)] = subtotal
-                    total += subtotal
+            total = 0
+            item_totals = {}
+            for i in range(1, 16):
+                s = scores[str(i)]
+                subtotal = s["A"] + s["B"] + s["C"] + s["D"]
+                item_totals[str(i)] = subtotal
+                total += subtotal
 
-            except Exception as e:
-                st.error("AIの応答を解析できませんでした。")
-                st.code(str(e))
-            else:
-                st.success("採点完了！")
+        st.success("採点完了")
 
-                for i in range(1, 16):
-                    with st.expander(
-                        f"{i}. {ITEM_NAMES[str(i)]}（{item_totals[str(i)]} / 20点）"
-                    ):
-                        for k in ["A", "B", "C", "D"]:
-                            st.markdown(f"**{k}：{scores[str(i)][k]}点**")
-                            st.write(comments[str(i)][k])
+        for i in range(1, 16):
+            with st.expander(
+                f"{i}. {ITEM_NAMES[str(i)]}（{item_totals[str(i)]} / 20点）"
+            ):
+                for k in ["A", "B", "C", "D"]:
+                    st.write(f"{k}：{scores[str(i)][k]}点")
 
-                st.markdown("---")
-                st.subheader(f"🔢 合計点：**{total} / 300 点**")
-                st.subheader(f"🏆 ランク：**{judge_rank(total)}**")
+        st.subheader(f"🔢 合計点：{total} / 300")
+        st.subheader(f"🏆 ランク：{judge_rank(total)}")
 
-                axis_label = st.radio(
-                    "📊 表示する評価軸",
-                    ["A（核心適合）", "B（明確性）", "C（根拠）", "D（議会適合）"]
-                )
-
-                show_axis_radar(scores, axis_label[0])
+        axis = st.radio(
+            "📊 表示する評価軸",
+            ["A", "B", "C", "D"]
+        )
+        show_axis_radar(scores, axis)
