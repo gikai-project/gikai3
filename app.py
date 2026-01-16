@@ -140,9 +140,15 @@ if st.button("AIで採点"):
     with st.spinner("採点中…"):
         response = client.responses.create(
             model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "You are a strict JSON-only evaluator."},
-                {"role": "user", "content": build_prompt(question_text)}
+            input=[
+                {
+                    "role": "system",
+                    "content": "You are a strict JSON-only evaluator."
+                },
+                {
+                    "role": "user",
+                    "content": build_prompt(question_text)
+                }
             ]
         )
         st.session_state.api_calls += 1
