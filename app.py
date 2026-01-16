@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 # Streamlit 基本設定
 # ======================================================
 st.set_page_config(
-    page_title="一般質問 採点AIシステム（300点モデル）",
+    page_title="地方議会一般質問 採点AIシステム（300点モデルver1）",
     layout="wide"
 )
 
