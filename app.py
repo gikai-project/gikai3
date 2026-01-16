@@ -61,15 +61,6 @@ AXIS_LABELS = {
     "D": "議会・行政適合性"
 }
 
-SCORE_EXPLANATION = {
-    5: "完全充足。具体・一義的で実務で修正不要。",
-    4: "実務上ほぼ問題なし。軽微な補足不足あり。",
-    3: "最低限達成。抽象的で追加説明が必要。",
-    2: "不足が明確。実務に結びつかない。",
-    1: "形式的・断片的。",
-    0: "未達・評価不能。"
-}
-
 # ======================================================
 # 判定
 # ======================================================
@@ -102,6 +93,7 @@ def show_radar_chart(item_totals):
         polar=dict(radialaxis=dict(range=[0, 20])),
         showlegend=False
     )
+
     st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
@@ -110,11 +102,12 @@ def show_radar_chart(item_totals):
 def build_prompt(text: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
-JSON以外は絶対に出力しないでください。
+**必ずJSONのみ**を出力してください。
 
+【評価対象】
 {text}
 
-出力形式：
+【出力形式】
 {{
  "scores": {{
    "1": {{"A":0,"B":0,"C":0,"D":0}},
@@ -145,19 +138,28 @@ st.caption(f"API利用状況：{st.session_state.api_calls} / {MAX_CALLS}")
 question_text = st.text_area("一般質問原稿", height=280)
 
 if st.button("AIで採点"):
-    check_api_limit(calls=3)
+    check_api_limit()
 
     with st.spinner("採点中…"):
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": build_prompt(question_text)}]
+            input=[
+                {
+                    "role": "system",
+                    "content": "You are a strict JSON-only evaluator."
+                },
+                {
+                    "role": "user",
+                    "content": build_prompt(question_text)
+                }
+            ]
         )
         st.session_state.api_calls += 1
 
     try:
-        raw = response.choices[0].message.content
+        raw = response.output_text
         data = json.loads(raw)
-    except Exception as e:
+    except Exception:
         st.error("JSON解析に失敗しました。")
         st.code(raw)
         st.stop()
@@ -167,17 +169,16 @@ if st.button("AIで採点"):
     item_totals = {}
 
     for i in range(1, 16):
-        s = scores[str(i)]
-        subtotal = sum(s.values())
+        subtotal = sum(scores[str(i)].values())
         item_totals[str(i)] = subtotal
         total += subtotal
 
     # 判定表示
     if total >= 210:
-        st.success(f"🟢 合格：{total} / 300")
+        st.success(f"🟢 合格：{total} / 300（{judge_rank(total)}）")
     elif total >= 180:
-        st.warning(f"🟡 ボーダー：{total} / 300")
+        st.warning(f"🟡 ボーダー：{total} / 300（{judge_rank(total)}）")
     else:
-        st.error(f"🔴 不合格：{total} / 300")
+        st.error(f"🔴 不合格：{total} / 300（{judge_rank(total)}）")
 
     show_radar_chart(item_totals)
