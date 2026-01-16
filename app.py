@@ -100,30 +100,18 @@ def show_radar_chart(item_totals):
 
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 20])),
-        showlegend=False,
-        title="項目別評価分布（20点満点）"
+        showlegend=False
     )
-
     st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
-# AI採点プロンプト
+# プロンプト
 # ======================================================
-def build_prompt(text: str, council: str, member: str) -> str:
-    council_disp = council if council.strip() else "未指定"
-    member_disp = member if member.strip() else "未指定"
-
+def build_prompt(text: str) -> str:
     return f"""
 あなたは地方議会の一般質問を評価する専門家です。
 JSON以外は絶対に出力しないでください。
 
-【議会名】
-{council_disp}
-
-【議員名】
-{member_disp}
-
-【一般質問原稿】
 {text}
 
 出力形式：
@@ -154,110 +142,42 @@ JSON以外は絶対に出力しないでください。
 st.title("📘 一般質問 採点AIシステム（300点モデル）")
 st.caption(f"API利用状況：{st.session_state.api_calls} / {MAX_CALLS}")
 
-# ------------------------------------------------------
-# 議会名・議員名（任意）
-# ------------------------------------------------------
-c1, c2 = st.columns(2)
+question_text = st.text_area("一般質問原稿", height=280)
 
-with c1:
-    council_name = st.text_input(
-        "🏛 議会名（任意）",
-        placeholder="〇〇市議会"
-    )
-
-with c2:
-    member_name = st.text_input(
-        "🧑‍💼 議員名（任意）",
-        placeholder="山田 太郎"
-    )
-
-# ------------------------------------------------------
-# 原稿入力（必須）
-# ------------------------------------------------------
-question_text = st.text_area(
-    "▼ 一般質問の原稿を貼り付けてください（必須）",
-    height=280
-)
-
-# ======================================================
-# 採点実行
-# ======================================================
-if st.button("🚀 AIで自動採点する"):
+if st.button("AIで採点"):
     check_api_limit(calls=3)
 
-    if not question_text.strip():
-        st.error("一般質問原稿が入力されていません。")
-        st.stop()
-
-    # -----------------------------
-    # 採点
-    # -----------------------------
-    with st.spinner("AIが採点中…"):
+    with st.spinner("採点中…"):
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{
-                "role": "user",
-                "content": build_prompt(
-                    question_text,
-                    council_name,
-                    member_name
-                )
-            }]
+            messages=[{"role": "user", "content": build_prompt(question_text)}]
         )
         st.session_state.api_calls += 1
 
     try:
         raw = response.choices[0].message.content
         data = json.loads(raw)
-    except Exception:
-        st.error("AIの出力が不正な形式でした。")
+    except Exception as e:
+        st.error("JSON解析に失敗しました。")
         st.code(raw)
         st.stop()
 
     scores = data["scores"]
-
     total = 0
     item_totals = {}
+
     for i in range(1, 16):
         s = scores[str(i)]
-        subtotal = s["A"] + s["B"] + s["C"] + s["D"]
+        subtotal = sum(s.values())
         item_totals[str(i)] = subtotal
         total += subtotal
 
-    # ==================================================
-    # 評価対象表示
-    # ==================================================
-    st.markdown(
-        f"""
-### 🏛 評価対象
-- **議会名**：{council_name if council_name.strip() else "（未入力）"}
-- **議員名**：{member_name if member_name.strip() else "（未入力）"}
-"""
-    )
-
-    # ==================================================
     # 判定表示
-    # ==================================================
     if total >= 210:
-        st.success(f"🟢 合格：{total} / 300 点（{judge_rank(total)}）")
+        st.success(f"🟢 合格：{total} / 300")
     elif total >= 180:
-        st.warning(f"🟡 ボーダー：{total} / 300 点（{judge_rank(total)}）")
+        st.warning(f"🟡 ボーダー：{total} / 300")
     else:
-        st.error(f"🔴 不合格：{total} / 300 点（{judge_rank(total)}）")
+        st.error(f"🔴 不合格：{total} / 300")
 
-    # ==================================================
-    # 項目別詳細
-    # ==================================================
-    for i in range(1, 16):
-        with st.expander(f"{i}. {ITEM_NAMES[str(i)]}（{item_totals[str(i)]} / 20点）"):
-            for k in ["A", "B", "C", "D"]:
-                p = scores[str(i)][k]
-                st.markdown(
-                    f"**{AXIS_LABELS[k]}：{p}点**｜{SCORE_EXPLANATION[p]}"
-                )
-
-    # ==================================================
-    # レーダーチャート
-    # ==================================================
-    st.subheader("📈 レーダーチャート")
     show_radar_chart(item_totals)
